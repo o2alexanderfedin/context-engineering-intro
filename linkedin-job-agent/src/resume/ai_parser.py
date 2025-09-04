@@ -50,7 +50,7 @@ Extract:
 - experience: List of work experiences with company, role, duration, and responsibilities
 - education: Educational background
 - preferred_roles: Based on the resume, what job roles would this person be suited for
-- keywords: List of important keywords for job searching
+- keywords: List of important keywords for job searching in the order balanced of importance for contemporary market and experience. Use web search if needed to decide which ones.
 - strengths: Key strengths and accomplishments
 - raw_text: Full resume markdown text
 
