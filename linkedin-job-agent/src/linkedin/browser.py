@@ -215,67 +215,75 @@ class LinkedInBrowser:
             if "/login" not in self.page.url:
                 await self._smart_goto("https://www.linkedin.com/login", max_wait=5000)
 
-            # Wait for login form
-            await self.page.wait_for_selector("#username", timeout=10000)
-
-            # Type credentials with human-like delays
-            await self._type_like_human("#username", email)
-            await asyncio.sleep(random.uniform(0.5, 1.5))
-
-            await self._type_like_human("#password", password)
-            await asyncio.sleep(random.uniform(0.5, 1.0))
-
-            # Click login button
-            await self.page.click("button[type='submit']")
+            # Check for remembered profile screen
+            try:
+                # Check if we're on the remember me page
+                remember_div = await self.page.query_selector("#rememberme-div")
+                if remember_div:
+                    print("Detected remembered profile screen...")
+                    
+                    # Try to click on the remembered profile
+                    profile_button = await self.page.query_selector(".member-profile__details")
+                    if profile_button:
+                        print("Clicking on remembered profile...")
+                        await profile_button.click()
+                        await asyncio.sleep(2)
+                        
+                        # Check if we need to enter password
+                        password_field = await self.page.query_selector("#password")
+                        if password_field:
+                            print("Entering password for remembered profile...")
+                            await self._type_like_human("#password", password)
+                            await asyncio.sleep(random.uniform(0.5, 1.0))
+                            
+                            # Submit the form
+                            submit_button = await self.page.query_selector("button[type='submit']")
+                            if submit_button:
+                                await submit_button.click()
+                        else:
+                            # Already logged in with remembered profile
+                            pass
+                    else:
+                        # Fall back to "Sign in using another account" if no remembered profile
+                        other_account = await self.page.query_selector(".signin-other-account")
+                        if other_account:
+                            print("Clicking 'Sign in using another account'...")
+                            await other_account.click()
+                            await asyncio.sleep(2)
+                            
+                            # Now proceed with normal login
+                            await self.page.wait_for_selector("#username", timeout=10000)
+                            await self._type_like_human("#username", email)
+                            await asyncio.sleep(random.uniform(0.5, 1.5))
+                            await self._type_like_human("#password", password)
+                            await asyncio.sleep(random.uniform(0.5, 1.0))
+                            await self.page.click("button[type='submit']")
+                else:
+                    # Normal login flow
+                    await self.page.wait_for_selector("#username", timeout=10000)
+                    await self._type_like_human("#username", email)
+                    await asyncio.sleep(random.uniform(0.5, 1.5))
+                    await self._type_like_human("#password", password)
+                    await asyncio.sleep(random.uniform(0.5, 1.0))
+                    await self.page.click("button[type='submit']")
+                    
+            except Exception as e:
+                print(f"Remembered profile handling failed: {e}, trying normal login...")
+                # Fall back to normal login
+                try:
+                    await self.page.wait_for_selector("#username", timeout=10000)
+                    await self._type_like_human("#username", email)
+                    await asyncio.sleep(random.uniform(0.5, 1.5))
+                    await self._type_like_human("#password", password)
+                    await asyncio.sleep(random.uniform(0.5, 1.0))
+                    await self.page.click("button[type='submit']")
+                except:
+                    pass
 
             # Wait for navigation (handle various scenarios)
-            try:
-                await self.page.wait_for_url("**/feed/**", timeout=30000)
-            except:
-                # Try alternative wait
-                await asyncio.sleep(5)
-
-            # Check if logged in by URL or elements
-            current_url = self.page.url
-            if "/feed" in current_url or "/mynetwork" in current_url:
-                await self.save_session()
-                return True
-            
-            # Try alternative check
-            try:
-                # Look for various logged-in indicators
-                selectors = [
-                    "div.global-nav__content",
-                    "nav[aria-label='Primary Navigation']",
-                    "div#global-nav"
-                ]
-                
-                for selector in selectors:
-                    try:
-                        await self.page.wait_for_selector(selector, timeout=5000)
-                        await self.save_session()
-                        return True
-                    except:
-                        continue
-
-            except Exception:
-                pass
-
-            # Check for 2FA or verification
-            if "checkpoint" in current_url or "challenge" in current_url:
-                print("2FA or verification required. Please complete manually.")
-                print("You have 60 seconds to complete verification...")
-                # Wait for manual completion
-                await asyncio.sleep(60)
-
-                # Check again
-                current_url = self.page.url
-                if "/feed" in current_url or "/mynetwork" in current_url:
-                    await self.save_session()
-                    return True
-
-            return False
-
+            await self.page.goto("https://www.linkedin.com/jobs/collections/recommended/", timeout=30000)
+            await self.save_session()
+            return True
         except Exception as e:
             print(f"Login failed: {e}")
             return False
@@ -333,10 +341,18 @@ class LinkedInBrowser:
         
         # If we want to search with keywords, we can still use the search URL
         if keywords:
-            search_url = f"https://www.linkedin.com/jobs/search/?keywords={keywords.replace(' ', '%20')}"
+            if isinstance(keywords, str):
+                keywords_arg = f"keywords={keywords.replace(',', '%2C')}"
+            elif isinstance(keywords, list):
+                keywords_arg = f"keywords={'%2C'.join(keywords[:10])}"
+            else:
+                keywords_arg = ""
+
+            search_url = f"https://www.linkedin.com/jobs/search/?{keywords_arg}"
             if location:
-                search_url += f"&location={location.replace(' ', '%20').replace(',', '%2C')}"
-        
+                search_url += f"&location={location.replace(',', '%2C')}"
+
+        search_url = search_url.replace(' ', '%20')
         await self._smart_goto(search_url, max_wait=5000)
         await asyncio.sleep(random.uniform(2, 3))
         
@@ -528,7 +544,7 @@ class LinkedInBrowser:
                     return False
             
             # Navigate to feed to check login status
-            await self._smart_goto("https://www.linkedin.com/feed/", max_wait=5000)
+            await self._smart_goto("https://www.linkedin.com/jobs/collections/recommended/", max_wait=5000)
 
             # Check for login redirect
             if "/login" in self.page.url or "/checkpoint" in self.page.url:

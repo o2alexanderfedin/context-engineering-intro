@@ -5,7 +5,11 @@ from typing import Optional, Dict, Any
 from playwright.async_api import Page
 import json
 import os
-from anthropic import AsyncAnthropic
+
+from src.linkedin.scraper import JobScraper
+from src.utils.claude_utils import ask_claude
+from src.utils.html_utils import html_to_markdown
+from src.utils.json_utils import extract_json_from_text
 
 
 class HumanJobApplicant:
@@ -99,18 +103,21 @@ class HumanJobApplicant:
         """Get all job cards visible on current page."""
         try:
             # Wait for job list to be visible
-            jobsList = await self.page.wait_for_selector('.//div[@data-job-id]/ancestor::ul', timeout=5000)
-            await self.page.wait_for_selector('div[data-job-id]', timeout=5000)
-            
-            
+            # jobsList = await self.page.wait_for_selector('div[@data-job-id]', timeout=5000)
+            # jobsList.query_selector('div[role="button"]')
+            jobsList = await self.page.wait_for_selector('xpath=.//div[@data-job-id]/ancestor::ul', timeout=5000)
+            list_items = await jobsList.query_selector_all('li')
+            for item in list_items:
+                await item.scroll_into_view_if_needed(timeout=1000)
+
             # Get all job cards
-            job_cards = await self.page.query_selector_all('div[data-job-id]')
+            job_cards = await jobsList.query_selector_all('div[data-job-id]')
             return job_cards
         except Exception as e:
             print(f"    Error getting job cards: {e}")
             return []
     
-    async def _click_and_read_job(self, job_card) -> Optional[Dict[str, Any]]:
+    async def _click_and_read_job(self, job_card: Page) -> Optional[Dict[str, Any]]:
         """Click on a job card and extract details from the detail panel."""
         try:
             # Click the job card
@@ -198,87 +205,51 @@ class HumanJobApplicant:
     
     async def _extract_job_info_with_ai(self, html: str, max_retries: int = 3) -> Optional[Dict[str, Any]]:
         """Use AI to extract job information from HTML with retry logic."""
-        # Truncate if too long
-        if len(html) > 50000:
-            html = html[:50000]
+        # Convert HTML to markdown first for better AI processing
+        markdown = html_to_markdown(html, max_length=15000)  # Limit to 15k chars
         
-        # Initialize Anthropic client if not already done
-        if not hasattr(self, '_anthropic_client'):
-            api_key = os.environ.get("ANTHROPIC_API_KEY")
-            if not api_key:
-                print("      Warning: ANTHROPIC_API_KEY not set, using fallback")
-                return {
-                    'title': 'Unknown',
-                    'company': 'Unknown',
-                    'location': 'Unknown',
-                    'description': html[:200] if html else 'No description available'
-                }
-            self._anthropic_client = AsyncAnthropic(api_key=api_key)
-        
+        # Use AI to extract job information from markdown
         for attempt in range(max_retries):
             try:
-                prompt = f"""Extract job information from this HTML content.
+                prompt = f"""Extract job information from this job posting.
 
-HTML:
-{html}
+Job Posting Content:
+```markdown
+{markdown}
+```
 
-Look for:
-1. Job title (usually in h1 or h2 tags, or elements with title in class/id)
-2. Company name (often in a span or div near the title)
-3. Location (look for location, workplace-type, or city/state text)
-4. Job description (the main body text describing the role)
+Extract the following information:
+1. Job title
+2. Company name
+3. Location (city, state, or remote)
+4. Job description
 
 Return a JSON object with exactly these fields:
+```json
 {{
   "title": "the job title",
   "company": "the company name",
   "location": "the job location",
-  "description": "first 200 characters of job description"
+  "description": "job description"
 }}
+```
 
-If you cannot find a field, use "Not Found" as the value.
-Return ONLY the JSON object, no other text."""
+If you cannot find a field, then skip the field."""
 
-                # Use Claude API
-                message = await self._anthropic_client.messages.create(
-                    model="claude-3-5-sonnet-20241022",
-                    max_tokens=1000,
-                    temperature=0,
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": prompt
-                        }
-                    ]
-                )
-                
-                # Extract text content from the response
-                response = message.content[0].text if message.content else ""
+                # Use Claude SDK
+                response = await ask_claude(prompt)
                 print(f"      AI response received ({len(response)} chars)")
                 
-                # Find JSON in response
-                start_idx = response.find('{')
-                end_idx = response.rfind('}') + 1
-                
-                if start_idx >= 0 and end_idx > start_idx:
-                    json_str = response[start_idx:end_idx]
-                    try:
-                        job_info = json.loads(json_str)
-                        # Ensure all required fields exist
-                        for field in ['title', 'company', 'location', 'description']:
-                            if field not in job_info:
-                                job_info[field] = 'Not Found'
-                        
-                        # If we got valid data, return it
-                        if job_info.get('title') != 'Unknown' and job_info.get('title') != 'Not Found':
-                            print(f"      Successfully extracted: {job_info.get('title')}")
-                            return job_info
-                            
-                    except json.JSONDecodeError as e:
-                        print(f"      JSON decode error: {e}")
-                        if attempt < max_retries - 1:
-                            await asyncio.sleep(1)  # Brief pause before retry
-                            continue
+                # Extract JSON from response (handles markdown code blocks)
+                try:
+                    job_info = extract_json_from_text(response)
+                    print(f"      Successfully extracted: {job_info.get('title')}")
+                    return job_info
+                except (json.JSONDecodeError, ValueError) as e:
+                    print(f"      JSON extraction error: {e}")
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(2)  # Brief pause before retry
+                        continue
                 
             except Exception as e:
                 print(f"      AI extraction error on attempt {attempt + 1}: {e}")
@@ -286,13 +257,13 @@ Return ONLY the JSON object, no other text."""
                     await asyncio.sleep(1)
                     continue
         
-        # All retries failed - return fallback
-        print(f"      All {max_retries} AI extraction attempts failed, using fallback")
+        # Fallback if all retries failed
+        print("      Warning: AI extraction failed, using fallback")
         return {
             'title': 'Unknown',
             'company': 'Unknown',
             'location': 'Unknown',
-            'description': html[:200] if html else 'No description available'
+            'description': markdown[:200] if markdown else 'No description available'
         }
     
     async def _evaluate_job_match(self, job_details: Dict[str, Any]) -> float:

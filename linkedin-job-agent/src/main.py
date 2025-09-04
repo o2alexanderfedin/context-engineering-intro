@@ -36,7 +36,7 @@ def cli(ctx, debug):
 @click.option("--keywords", "-k", help="Job search keywords")
 @click.option("--location", "-l", help="Job location")
 @click.option("--remote", is_flag=True, help="Search for remote jobs")
-@click.option("--limit", "-n", default=10, help="Maximum number of jobs to process")
+@click.option("--limit", "-n", default=50, help="Maximum number of jobs to process")
 @click.option("--dry-run", is_flag=True, help="Run without applying")
 @click.option("--auto-apply", is_flag=True, help="Automatically apply to matched jobs")
 @click.pass_context
@@ -69,7 +69,7 @@ async def search_and_apply(
     keywords: str | None,
     location: str,
     remote: bool,
-    limit: int,
+    limit: int
 ):
     """Main search and apply workflow."""
     console.print("\n[bold cyan]LinkedIn Job Application Agent[/bold cyan]\n")
@@ -87,7 +87,7 @@ async def search_and_apply(
             resume_data = await parser.parse(resume_path)
             
             # Also get the raw text for later use
-            resume_text = parser._extract_raw_text(resume_path)
+            resume_text = resume_data["raw_text"]
             
             console.print(f"✓ Resume parsed: [green]{resume_data.get('name', 'Unknown')}[/green]")
             
@@ -104,20 +104,8 @@ async def search_and_apply(
 
         progress.remove_task(task)
 
-    # Step 2: Get search keywords from AI if not provided
-    if keywords is None:
-        # Ask AI to suggest search keywords based on resume
-        suggested_keywords = await parser.get_keywords(resume_text)
-        if suggested_keywords:
-            # Use first few keywords as search term
-            keywords = " ".join(suggested_keywords[:3])
-            console.print(f"  AI suggested keywords: [cyan]{keywords}[/cyan]")
-        else:
-            keywords = "Software Engineer"
-            console.print(f"  Default keywords: [cyan]{keywords}[/cyan]")
-    elif keywords == "":
-        # Empty string means use recommended jobs (no keyword search)
-        console.print("  Using LinkedIn recommended jobs (no keyword search)")
+    # Step 2: Get search keywords from AI
+    console.print(f"  AI suggested keywords: [cyan]{resume_data["keywords"]}[/cyan]")
 
     # Step 3: Initialize browser
     console.print("\n[bold]Initializing browser...[/bold]")
@@ -150,7 +138,7 @@ async def search_and_apply(
             console.print(f"\n[bold]Searching for: {keywords} in {location}[/bold]")
         else:
             console.print("\n[bold]Getting LinkedIn recommended jobs[/bold]")
-        await browser.search_jobs(keywords, location, remote)
+        await browser.search_jobs(resume_data["keywords"], resume_data["location"], remote)
 
         # Step 5: Use human-like application flow
         from .linkedin.human_flow import HumanJobApplicant

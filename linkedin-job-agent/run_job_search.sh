@@ -112,7 +112,7 @@ case "$COMMAND" in
             --resume "$RESUME" \
             --keywords "Software Engineer" \
             --dry-run \
-            --limit 5
+            --limit 50
         ;;
         
     *)
