@@ -1,0 +1,6 @@
+John Doe
+Software Engineer
+
+Skills: Python, JavaScript, TypeScript, React, Node.js, FastAPI, Django
+Experience: 10 years building scalable web applications
+Education: BS Computer Science
