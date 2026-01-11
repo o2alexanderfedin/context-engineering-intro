@@ -195,20 +195,54 @@ class LinkedInBrowser:
             raise RuntimeError("Browser not initialized")
 
         try:
-            # First check if we're on a page with a sign-in link
+            # First check if we're on a page with a sign-in modal or link
             current_url = self.page.url
             if "linkedin.com" in current_url and "/login" not in current_url:
-                # Try to find and click sign-in link
+                # Check for "Sign in to view more jobs" modal
                 try:
-                    sign_in_link = await self.page.query_selector("a[href*='/login']")
-                    if not sign_in_link:
-                        sign_in_link = await self.page.query_selector("a:has-text('Sign in')")
+                    # Look for the modal sign-in button
+                    modal_sign_in = await self.page.query_selector("button.sign-in-modal__outlet-btn")
+                    if not modal_sign_in:
+                        # Also check for the contextual sign-in modal button
+                        modal_sign_in = await self.page.query_selector("button[data-modal='base-sign-in-modal']")
                     
-                    if sign_in_link:
-                        print("Found sign-in link, clicking...")
-                        await sign_in_link.click()
-                        await self.page.wait_for_timeout(2000)
-                except:
+                    if modal_sign_in:
+                        print("Found sign-in modal button, clicking...")
+                        await modal_sign_in.click()
+                        await asyncio.sleep(2)
+                        
+                        # Now look for the email/password fields in the modal
+                        email_field = await self.page.query_selector("#base-sign-in-modal_session_key")
+                        if email_field:
+                            print("Entering credentials in modal...")
+                            await self._type_like_human("#base-sign-in-modal_session_key", email)
+                            await asyncio.sleep(random.uniform(0.5, 1.0))
+                            await self._type_like_human("#base-sign-in-modal_session_password", password)
+                            await asyncio.sleep(random.uniform(0.5, 1.0))
+                            
+                            # Click the sign-in button in the modal
+                            modal_submit = await self.page.query_selector("button[data-id='sign-in-form__submit-btn']")
+                            if modal_submit:
+                                await modal_submit.click()
+                                await asyncio.sleep(3)
+                                
+                                # Check if login was successful
+                                current_url = self.page.url
+                                if any(path in current_url for path in ["/jobs", "/feed", "/mynetwork"]):
+                                    await self.save_session()
+                                    return True
+                    else:
+                        # Try to find regular sign-in link
+                        sign_in_link = await self.page.query_selector("a[href*='/login']")
+                        if not sign_in_link:
+                            sign_in_link = await self.page.query_selector("a:has-text('Sign in')")
+                        
+                        if sign_in_link:
+                            print("Found sign-in link, clicking...")
+                            await sign_in_link.click()
+                            await self.page.wait_for_timeout(2000)
+                except Exception as e:
+                    print(f"Modal/link handling: {e}")
                     pass
             
             # Navigate to LinkedIn login if not already there

@@ -179,6 +179,8 @@ class HumanJobApplicant:
                 'button[aria-label*="Easy Apply"]',
                 'button:has-text("Easy Apply")',
                 'button.jobs-apply-button',
+                '#jobs-apply-button-id',
+                'button[data-job-id]',
                 'div[class*="easy-apply"]'
             ]
             
@@ -187,8 +189,12 @@ class HumanJobApplicant:
                 try:
                     btn = await self.page.query_selector(selector)
                     if btn:
-                        easy_apply = True
-                        break
+                        # Check if button is visible and enabled
+                        is_visible = await btn.is_visible()
+                        is_enabled = await btn.is_enabled()
+                        if is_visible and is_enabled:
+                            easy_apply = True
+                            break
                 except:
                     pass
             
@@ -281,7 +287,8 @@ Requirements: {job_details.get('requirements', [])}
             match_result = await self.ai_parser.match_job(self.resume_text, job_text)
             
             if match_result and isinstance(match_result, dict):
-                return match_result.get('match_score', 0) / 100.0
+                match_result_val = match_result.get('match_score', 0)
+                return match_result_val / 100.0
             
             return 0.0
             
@@ -292,52 +299,102 @@ Requirements: {job_details.get('requirements', [])}
     async def _apply_to_job(self) -> bool:
         """Click Easy Apply and go through the application process."""
         try:
-            # Find and click Easy Apply button
-            easy_apply_btn = await self.page.query_selector('button[aria-label*="Easy Apply"]')
+            # Find Easy Apply button with multiple selectors
+            easy_apply_selectors = [
+                'button[aria-label*="Easy Apply"]',
+                '#jobs-apply-button-id',
+                'button.jobs-apply-button',
+                'button[data-job-id]',
+                'button:has-text("Easy Apply")'
+            ]
+            
+            easy_apply_btn = None
+            for selector in easy_apply_selectors:
+                try:
+                    btn = await self.page.wait_for_selector(selector, timeout=1000)
+                    if btn:
+                        is_visible = await btn.is_visible()
+                        is_enabled = await btn.is_enabled()
+                        if is_visible and is_enabled:
+                            easy_apply_btn = btn
+                            print(f"      Found Easy Apply button with selector: {selector}")
+                            break
+                except:
+                    continue
+            
             if not easy_apply_btn:
+                print("      No visible/enabled Easy Apply button found")
                 return False
             
+            # Scroll to button and click
+            await easy_apply_btn.scroll_into_view_if_needed()
+            await self.page.wait_for_timeout(1000)
             await easy_apply_btn.click()
-            await self.page.wait_for_timeout(2000)
+            await self.page.wait_for_timeout(3000)  # Wait longer for modal to open
             
             # Check if modal opened
-            modal = await self.page.query_selector('div[role="dialog"]')
-            if not modal:
+            try:
+                modal = await self.page.wait_for_selector('div[role="dialog"]', timeout=5000)
+                print("      Application modal opened")
+            except:
+                print("      No application modal found after clicking Easy Apply")
                 return False
             
             # Handle the application flow
             max_steps = 5
             for step in range(max_steps):
                 # Check for submit button
-                submit_btn = await self.page.query_selector('button[aria-label*="Submit application"]')
-                if submit_btn:
-                    await submit_btn.click()
-                    await self.page.wait_for_timeout(2000)
-                    return True
+                try:
+                    submit_btn = await self.page.wait_for_selector('button[aria-label*="Submit application"]', timeout=3000)
+                    if submit_btn and await submit_btn.is_visible():
+                        print(f"        Found submit button")
+                        await submit_btn.click()
+                        await self.page.wait_for_timeout(2000)
+                        print("        Application submitted!")
+                        return True
+                except:
+                    pass
                 
                 # Check for next button
-                next_btn = await self.page.query_selector('button[aria-label*="Continue to next step"]')
-                if not next_btn:
-                    next_btn = await self.page.query_selector('button:has-text("Next")')
+                next_btn = None
+                try:
+                    next_btn = await self.page.wait_for_selector('button[aria-label*="Continue to next step"]', timeout=3000)
+                except:
+                    try:
+                        next_btn = await self.page.wait_for_selector('button:has-text("Next")', timeout=3000)
+                    except:
+                        pass
                 
-                if next_btn:
+                if next_btn and await next_btn.is_visible():
+                    print(f"        Found next button")
                     # Check if there are required fields to fill
                     # For now, just click next (in real implementation, would fill fields)
                     await next_btn.click()
                     await self.page.wait_for_timeout(2000)
                 else:
                     # Look for review button
-                    review_btn = await self.page.query_selector('button[aria-label*="Review your application"]')
-                    if review_btn:
-                        await review_btn.click()
-                        await self.page.wait_for_timeout(2000)
-                    else:
+                    try:
+                        review_btn = await self.page.wait_for_selector('button[aria-label*="Review your application"]', timeout=3000)
+                        if review_btn and await review_btn.is_visible():
+                            print(f"        Found review button")
+                            await review_btn.click()
+                            await self.page.wait_for_timeout(2000)
+                        else:
+                            print("        No more buttons found, stopping")
+                            break
+                    except:
+                        print("        No more buttons found, stopping")
                         break
             
             # If we got here without submitting, close the modal
-            close_btn = await self.page.query_selector('button[aria-label*="Dismiss"]')
-            if close_btn:
-                await close_btn.click()
+            try:
+                close_btn = await self.page.wait_for_selector('button[aria-label*="Dismiss"]', timeout=3000)
+                if close_btn and await close_btn.is_visible():
+                    print("        Closing application modal")
+                    await close_btn.click()
+            except:
+                print("        Could not find close button")
+                pass
             
             return False
             

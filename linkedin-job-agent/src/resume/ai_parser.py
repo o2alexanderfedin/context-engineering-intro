@@ -1,9 +1,11 @@
 """AI-powered resume parser using Claude Code SDK."""
 
 import os
+import hashlib
 from pathlib import Path
 from typing import Optional
 
+import diskcache as dc
 from pdfplumber import PDF
 from docx import Document as DocxDocument
 
@@ -26,9 +28,33 @@ class AIResumeParser:
         
         # Add ~/bin to PATH for claude CLI
         os.environ['PATH'] = os.path.expanduser('~/bin') + ':' + os.environ.get('PATH', '')
+        
+        # Initialize cache
+        cache_dir = Path.home() / '.linkedin-job-agent' / 'cache'
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        self.cache = dc.Cache(str(cache_dir), size_limit=100 * 1024 * 1024)  # 100MB limit
 
+    def _get_file_hash(self, file_path: str) -> str:
+        """Get SHA256 hash of file content."""
+        hash_sha256 = hashlib.sha256()
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(4096), b""):
+                hash_sha256.update(chunk)
+        return hash_sha256.hexdigest()
+    
     async def parse(self, file_path: str) -> dict:
-        """Parse resume using AI."""
+        """Parse resume using AI with caching."""
+        # Check cache first
+        file_hash = self._get_file_hash(file_path)
+        cache_key = f"resume_parse_{file_hash}"
+        
+        # Try to get from cache
+        cached_result = self.cache.get(cache_key)
+        if cached_result is not None:
+            print(f"Using cached resume parse for {Path(file_path).name}")
+            return cached_result
+        
+        print(f"Parsing resume {Path(file_path).name} (not in cache)")
         raw_text = self._extract_raw_text(file_path)
 
         # Now use AI to extract ALL information
@@ -70,6 +96,11 @@ Return ONLY valid JSON."""
                 raise ValueError(f"Failed to parse AI response: email not parsed")
             if not parsed.get('raw_text'):
                 parsed['raw_text'] = raw_text
+            
+            # Cache the result
+            self.cache.set(cache_key, parsed, expire=7 * 24 * 60 * 60)  # Cache for 7 days
+            print(f"Cached resume parse for {Path(file_path).name}")
+            
             return parsed
         except Exception as e:
             # If JSON parsing fails, raise an error with details
@@ -118,14 +149,31 @@ Provide:
 - recommendation: Should apply? (yes/no/maybe)
 
 RESUME:
+<RESUME>
 {resume_text}
+</RESUME>
 
 JOB DESCRIPTION:
+<JOB-DESCRIPTION>
 {job_description}
+</JOB-DESCRIPTION>
 
-Return ONLY valid JSON."""
+IMPORTANT: Return ONLY valid JSON. Do not include any text, explanations, or markdown formatting outside the JSON object.
 
-        result = await ask_claude(prompt, debug=False)
+Example expected format:
+{{
+  "match_score": 85,
+  "matching_skills": ["Python", "Machine Learning", "SQL"],
+  "missing_skills": ["Kubernetes", "Docker"],
+  "strengths": ["Strong Python background matches requirement", "ML experience aligns with role"],
+  "weaknesses": ["Missing container orchestration experience"],
+  "recommendation": "yes"
+}}
+
+Return ONLY the JSON object, nothing else."""
+
+        system_prompt = "You are a job matching expert. Analyze resumes vs job descriptions and return ONLY JSON responses. Never include explanations or non-JSON text."
+        result = await ask_claude(prompt, system_prompt=system_prompt, debug=False)
         
         if not result:
             return {"error": "No AI response", "match_score": 50, "recommendation": "maybe"}

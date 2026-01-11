@@ -70,10 +70,10 @@ A CLI-based application where users:
 - url: https://python-docx.readthedocs.io/
   why: DOCX parsing with table support
   
-- file: /Users/alexanderfedin/Projects/llm-context-engineering/CLAUDE.md
+- file: ~/Projects/llm-context-engineering/CLAUDE.md
   why: Project conventions and patterns to follow
   
-- file: /Users/alexanderfedin/Projects/llm-context-engineering/INITIAL.md
+- file: ~/Projects/llm-context-engineering/INITIAL.md
   why: Feature specification and requirements
 ```
 
